@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel Route Planner Demo</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #12212d; background: #f3f6f7; }
+    body { margin: 0; }
+    header { background: #123c45; color: white; padding: 1rem 1.4rem; }
+    header h1 { margin: 0; font-size: 1.3rem; }
+    header p { margin: .3rem 0 0; font-size: .9rem; opacity: .9; }
+    main { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; min-height: calc(100vh - 78px); }
+    aside { padding: 1.2rem; background: white; overflow: auto; }
+    fieldset { border: 1px solid #d5dfe1; border-radius: 8px; margin: 0 0 1rem; padding: .8rem; }
+    legend { font-weight: 700; padding: 0 .3rem; }
+    label { display: block; font-size: .85rem; margin-bottom: .5rem; }
+    input { display: block; box-sizing: border-box; width: 100%; padding: .5rem; margin-top: .2rem; border: 1px solid #a9bbc0; border-radius: 5px; font: inherit; }
+    button { width: 100%; background: #0b6c67; color: white; border: 0; border-radius: 6px; padding: .7rem; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    #status { min-height: 1.5rem; font-size: .9rem; }
+    #summary { font-size: .95rem; line-height: 1.65; }
+    .stop { border-top: 1px solid #d5dfe1; padding: .7rem 0; font-size: .9rem; }
+    .note { color: #47616b; font-size: .8rem; }
+    #map { min-height: 65vh; height: 100%; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } #map { height: 60vh; } }
+  </style>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</head>
+<body>
+  <header>
+    <h1>Fuel Route Planner</h1>
+    <p>Map preview for the Django route API</p>
+  </header>
+  <main>
+    <aside>
+      <form id="route-form">
+        <fieldset>
+          <legend>Start</legend>
+          <label>Latitude <input name="start-lat" type="number" step="any" value="30.2672" required></label>
+          <label>Longitude <input name="start-lon" type="number" step="any" value="-97.7431" required></label>
+        </fieldset>
+        <fieldset>
+          <legend>Finish</legend>
+          <label>Latitude <input name="finish-lat" type="number" step="any" value="32.7767" required></label>
+          <label>Longitude <input name="finish-lon" type="number" step="any" value="-96.7970" required></label>
+        </fieldset>
+        <label>Fuel in tank at departure, gallons
+          <input name="starting-fuel" type="number" min="0" max="50" step="0.1" value="50" required>
+        </label>
+        <button type="submit">Plan route</button>
+      </form>
+      <p id="status" role="status"></p>
+      <div id="summary"></div>
+      <div id="stops"></div>
+      <p class="note">Fuel stops are estimated from the listed prices and prelocated stations. Exit coordinates and access distances are approximate. The map uses OpenStreetMap tiles with attribution below.</p>
+    </aside>
+    <div id="map" aria-label="Route and recommended fuel stops"></div>
+  </main>
+  <script>
+    const map = L.map('map').setView([38.5, -98.5], 4);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
+    }).addTo(map);
+    let routeLayer;
+    const form = document.getElementById('route-form');
+    const status = document.getElementById('status');
+    const summary = document.getElementById('summary');
+    const stops = document.getElementById('stops');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const fields = new FormData(form);
+      const payload = {
+        start: {latitude: Number(fields.get('start-lat')), longitude: Number(fields.get('start-lon'))},
+        finish: {latitude: Number(fields.get('finish-lat')), longitude: Number(fields.get('finish-lon'))},
+        starting_fuel_gallons: Number(fields.get('starting-fuel'))
+      };
+      const button = form.querySelector('button');
+      button.disabled = true;
+      status.textContent = 'Planning route…';
+      try {
+        const response = await fetch('/api/v1/routes/', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error?.detail || 'Route planning failed.');
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = L.geoJSON(data.map, {
+          style: () => ({color: '#087a75', weight: 5, opacity: .9}),
+          pointToLayer: (feature, latlng) => {
+            const color = feature.properties.kind === 'fuel_stop' ? '#e36c29' :
+              feature.properties.kind === 'start' ? '#1675bd' : '#9e315e';
+            return L.circleMarker(latlng, {radius: 8, color: 'white', weight: 2, fillColor: color, fillOpacity: 1});
+          },
+          onEachFeature: (feature, layer) => {
+            if (feature.geometry.type !== 'Point') return;
+            const popup = document.createElement('div');
+            popup.textContent = feature.properties.name || feature.properties.label;
+            layer.bindPopup(popup);
+          }
+        }).addTo(map);
+        map.fitBounds(routeLayer.getBounds(), {padding: [24, 24]});
+        status.textContent = `${data.provider_requests.directions} routing call(s), ${data.provider_requests.geocoding} geocoding call(s) on this request.`;
+        summary.textContent = `${data.route.distance_miles} miles · ${data.fuel.fuel_used_gallons} gallons used · $${data.fuel.total_cost_usd} spent at ${data.fuel_stops.length} fuel stop(s)`;
+        stops.replaceChildren();
+        for (const stop of data.fuel_stops) {
+          const item = document.createElement('div');
+          item.className = 'stop';
+          item.textContent = `${stop.name} — mile ${stop.mile_marker}; ${stop.gallons_purchased} gal × $${stop.price_usd_per_gallon}/gal = $${stop.cost_usd}`;
+          stops.append(item);
+        }
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "sources": {
+    "fuel_prices_sha256": "c704371f141ded9c54df6c32d488a0ba2ceb589f88c936c967daa5330e0cd241",
+    "openinterstate_release": "openinterstate-release-2026-07-13-gha-33.tar.gz",
+    "openinterstate_sha256": "36fd3c2bddb94a11bfc5f6b178e866f341f8a6e779c1bfd4a94def564a829487",
+    "geonames_us_sha256": "cf76db2ab9917a7a890cb38d12b6a377ab6246fbdedf8de80a6d4f5243bdb540"
+  },
+  "coverage": {
+    "csv_records": 8151,
+    "valid_us_price_records": 7531,
+    "filtered_non_us_records": 620,
+    "invalid_price_records": 0,
+    "invalid_identity_records": 0,
+    "unique_us_stations": 6626,
+    "conflicting_price_stations": 487,
+    "city_names_located": 3789,
+    "city_names_missing": 19,
+    "exact_station_locations": 690,
+    "station_pois_linked_to_exits": 690,
+    "city_poi_candidates_excluded": 321,
+    "stations_matched_by_geocoder": 0,
+    "approximate_exit_locations": 1929,
+    "ambiguous_locations": 1200,
+    "unresolved_locations": 2807,
+    "recommendable_stations": 2619,
+    "recommendable_percent": 39.5,
+    "stations_without_recommendable_location": 4007,
+    "excluded_by_reason": {
+      "City not found; multiple exits.": 11,
+      "Exit absent from OpenInterstate.": 77,
+      "Exit too far from listed city.": 116,
+      "Multiple matching gas POIs.": 577,
+      "Multiple named gas POIs near the listed city.": 260,
+      "Multiple plausible exits.": 31,
+      "Named gas POI near city lacks a matching road or exit.": 321,
+      "No interstate exit to match.": 2614
+    },
+    "geocoder_requests": 0,
+    "geocoder_enabled": false
+  },
+  "location_policy": "Only exact station POIs and unambiguous interstate exits are recommendable. Exit coordinates approximate access, not the station forecourt. Ambiguous and unresolved records are excluded.",
+  "price_policy": "The median of distinct listed prices for the same OPIS ID, address, city, and state is used. Conflicts are flagged because the CSV has no observation timestamps."
+}
