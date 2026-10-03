@@ -200,5 +200,6 @@ def plan_route(request):
         'attribution': [
             'OpenRouteService / HeiGIT', 'OpenStreetMap contributors',
             'OpenInterstate', 'GeoNames', 'US Census Bureau',
+            'Geoapify: https://www.geoapify.com/',
         ],
     })

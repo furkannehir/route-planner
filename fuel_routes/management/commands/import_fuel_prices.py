@@ -1,6 +1,7 @@
 import json
 import os
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from django.conf import settings
@@ -91,6 +92,7 @@ class Command(BaseCommand):
             )
 
         station_models = []
+        pending_geocodes = []
         for station in stations:
             location = resolve_from_exits(
                 station, city_centers, exits, gas_places, gas_links,
@@ -102,10 +104,7 @@ class Command(BaseCommand):
             if location['location_type'] in {'unresolved', 'ambiguous'}:
                 response = cached_geocodes.get(station.station_key)
                 if response is None and geocoder:
-                    try:
-                        response = geocoder.lookup(station)
-                    except GeocodingError as error:
-                        raise CommandError(str(error)) from error
+                    pending_geocodes.append(station)
                 geocoded = resolve_geocoded_station(station, response, city_centers)
                 if geocoded:
                     location = geocoded
@@ -136,6 +135,32 @@ class Command(BaseCommand):
                 location_reference=location.get('location_reference', ''),
                 location_note=location.get('location_note', ''),
             ))
+
+        if geocoder and pending_geocodes:
+            remaining = max(0, geocoder.max_requests - geocoder.requests_made_today)
+            selected = pending_geocodes[:remaining]
+            models_by_key = {model.station_key: model for model in station_models}
+            # Request starts are spaced by the geocoder's shared rate limiter.
+            with ThreadPoolExecutor(max_workers=24) as pool:
+                try:
+                    for station, response in zip(
+                        selected, pool.map(geocoder.lookup, selected),
+                    ):
+                        location = resolve_geocoded_station(
+                            station, response, city_centers,
+                        )
+                        if location:
+                            model = models_by_key[station.station_key]
+                            model.location_type = location['location_type']
+                            model.latitude = location.get('latitude')
+                            model.longitude = location.get('longitude')
+                            model.location_source = location.get('location_source', '')
+                            model.location_reference = location.get(
+                                'location_reference', '',
+                            )
+                            model.location_note = location.get('location_note', '')
+                except GeocodingError as error:
+                    raise CommandError(str(error)) from error
 
         row_counts = Counter(row.status for row in price_rows)
         location_counts = Counter(station.location_type for station in station_models)
@@ -170,6 +195,15 @@ class Command(BaseCommand):
             ),
             'excluded_by_reason': dict(sorted(excluded_reasons.items())),
             'geocoder_requests': geocoder.requests_made if geocoder else 0,
+            'geocoder_request_failures': (
+                geocoder.request_failures if geocoder else 0
+            ),
+            'geocoder_requests_today': (
+                geocoder.requests_made_today if geocoder else 0
+            ),
+            'cached_geocode_responses': (
+                len(geocoder.cache) if geocoder else len(cached_geocodes)
+            ),
             'geocoder_enabled': bool(geocoder),
         }
 

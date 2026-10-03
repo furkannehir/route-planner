@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,10 @@ class GeoapifyGeocoder:
         self.max_requests = max_requests
         self.requests_made = 0
         self.requests_made_today = 0
+        self.request_failures = 0
         self.cache = read_geocode_cache(self.cache_path)
+        self._lock = threading.Lock()
+        self._next_request_at = 0.0
         today = datetime.now(timezone.utc).date()
         if self.cache_path.exists():
             with self.cache_path.open('r', encoding='utf-8') as source:
@@ -60,10 +64,9 @@ class GeoapifyGeocoder:
                             self.requests_made_today += 1
 
     def lookup(self, station):
-        if station.station_key in self.cache:
-            return self.cache[station.station_key]
-        if self.requests_made_today >= self.max_requests:
-            return None
+        with self._lock:
+            if station.station_key in self.cache:
+                return self.cache[station.station_key]
         query = f'{station.name}, {station.city}, {station.state}, USA'
         if station.address[:1].isdigit():
             query = f'{station.address}, {station.city}, {station.state}, USA'
@@ -79,24 +82,46 @@ class GeoapifyGeocoder:
                 'User-Agent': 'route-planner-assessment/1.0',
             },
         )
-        try:
-            with urlopen(request, timeout=15) as response:
-                result = json.load(response)
-        except HTTPError as error:
-            raise GeocodingError(f'Geoapify returned HTTP {error.code}.') from None
-        except (URLError, TimeoutError, ValueError) as error:
-            raise GeocodingError(f'Geoapify request failed: {type(error).__name__}.') from None
-        self.requests_made += 1
-        self.requests_made_today += 1
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.cache_path.open('a', encoding='utf-8') as target:
-            target.write(json.dumps({
-                'station_key': station.station_key,
-                'requested_at': datetime.now(timezone.utc).isoformat(),
-                'response': result,
-            }, separators=(',', ':')) + '\n')
-        self.cache[station.station_key] = result
-        time.sleep(0.22)  # Stay below the free plan's five requests per second.
+        for attempt in range(3):
+            with self._lock:
+                if self.requests_made_today >= self.max_requests:
+                    return None
+                delay = self._next_request_at - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                self._next_request_at = time.monotonic() + 0.22
+                self.requests_made_today += 1
+                self.requests_made += 1
+            try:
+                with urlopen(request, timeout=20) as response:
+                    result = json.load(response)
+                break
+            except HTTPError as error:
+                if error.code in {401, 403}:
+                    raise GeocodingError(
+                        f'Geoapify rejected the API key (HTTP {error.code}).'
+                    ) from None
+                if error.code not in {429, 500, 502, 503, 504}:
+                    raise GeocodingError(
+                        f'Geoapify returned HTTP {error.code}.'
+                    ) from None
+            except (URLError, TimeoutError, ValueError):
+                pass
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+        else:
+            with self._lock:
+                self.request_failures += 1
+            return None
+        with self._lock:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.cache_path.open('a', encoding='utf-8') as target:
+                target.write(json.dumps({
+                    'station_key': station.station_key,
+                    'requested_at': datetime.now(timezone.utc).isoformat(),
+                    'response': result,
+                }, separators=(',', ':')) + '\n')
+            self.cache[station.station_key] = result
         return result
 
 

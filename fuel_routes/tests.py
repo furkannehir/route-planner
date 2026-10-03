@@ -13,7 +13,7 @@ from django.core.cache import cache
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from .geocoding import resolve_geocoded_station
+from .geocoding import GeoapifyGeocoder, resolve_geocoded_station
 from .importing import (
     ExitPoint, GasPlace, StationInput, build_gas_grid, read_prices,
     resolve_from_exits, resolve_from_nearby_gas,
@@ -23,6 +23,7 @@ from .planning import (
     Candidate, FuelPlanError, RouteProjector, candidates_along_route,
     optimize_fuel_stops,
 )
+from .routing import OpenRouteService, RoutingError
 from .us_boundaries import is_us_location
 
 
@@ -178,6 +179,28 @@ class ImportRulesTests(SimpleTestCase):
         ))
 
 
+    def test_geocoder_retries_a_transient_timeout_and_caches_success(self):
+        station = StationInput(
+            'station-1', '10', 'PILOT #10', 'US-190', 'Jarrell',
+            'TX', Decimal('3.00'), False, [2],
+        )
+        result = {'features': []}
+        with tempfile.TemporaryDirectory() as directory:
+            geocoder = GeoapifyGeocoder(
+                'test-key', Path(directory) / 'responses.jsonl', max_requests=3,
+            )
+            with patch('fuel_routes.geocoding.urlopen', side_effect=[
+                TimeoutError(), io.BytesIO(json.dumps(result).encode('utf-8')),
+            ]) as urlopen:
+                with patch('fuel_routes.geocoding.time.sleep'):
+                    self.assertEqual(geocoder.lookup(station), result)
+            self.assertEqual(urlopen.call_count, 2)
+            self.assertEqual(geocoder.requests_made, 2)
+            self.assertEqual(geocoder.request_failures, 0)
+            self.assertEqual(geocoder.lookup(station), result)
+            self.assertEqual(urlopen.call_count, 2)
+
+
 class ImportCommandTests(TestCase):
     def test_import_is_repeatable_and_preserves_source_rows(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -190,7 +213,7 @@ class ImportCommandTests(TestCase):
                 ['10', 'PILOT #10', 'I-35 EXIT 271', 'Jarrell', 'TX', '1', '3.00'],
                 ['10', 'PILOT #10', 'I-35 EXIT 271', 'Jarrell', 'TX', '1', '3.20'],
                 ['20', 'CANADIAN STOP', 'I-1 EXIT 1', 'Toronto', 'ON', '2', '4.00'],
-                ['30', 'OTHER FUEL', 'US-190', 'Jarrell', 'TX', '3', '3.50'],
+                ['30', 'PILOT #30', 'US-190', 'Jarrell', 'TX', '3', '3.50'],
             ])
             with zipfile.ZipFile(geonames, 'w') as archive:
                 archive.writestr('US.txt', '\t'.join([
@@ -227,7 +250,7 @@ class ImportCommandTests(TestCase):
             }
             call_command('import_fuel_prices', stdout=io.StringIO(), **command_options)
             unmatched = FuelStation.objects.get(opis_id='30')
-            self.assertEqual(unmatched.location_type, 'unresolved')
+            self.assertIn(unmatched.location_type, {'unresolved', 'ambiguous'})
             unmatched.location_type = 'station'
             unmatched.location_source = 'geoapify'
             unmatched.latitude = 30.83
@@ -248,6 +271,33 @@ class ImportCommandTests(TestCase):
             self.assertEqual(json.loads(report.read_text())['coverage']
                              ['filtered_non_us_records'], 1)
 
+            geocoded = {'features': [{
+                'geometry': {'coordinates': [-97.602, 30.822]},
+                'properties': {
+                    'country_code': 'us', 'state_code': 'TX',
+                    'city': 'Jarrell', 'name': 'Pilot #30',
+                    'result_type': 'amenity',
+                    'rank': {'confidence': 0.95}, 'place_id': 'geo-30-new',
+                },
+            }]}
+            with patch.dict('os.environ', {'GEOAPIFY_API_KEY': 'test-key'}):
+                with patch(
+                    'fuel_routes.management.commands.import_fuel_prices'
+                    '.GeoapifyGeocoder.lookup', return_value=geocoded,
+                ) as lookup:
+                    call_command(
+                        'import_fuel_prices', stdout=io.StringIO(),
+                        geocode=True, max_geocode_requests=1,
+                        geocode_cache=root / 'geocodes.jsonl',
+                        **command_options,
+                    )
+            self.assertEqual(lookup.call_count, 1)
+            station = FuelStation.objects.get(opis_id='30')
+            self.assertEqual(station.location_source, 'geoapify')
+            self.assertEqual(station.location_reference, 'geo-30-new')
+            self.assertEqual(json.loads(report.read_text())['coverage']
+                             ['stations_matched_by_geocoder'], 1)
+
 
 class RoutePlannerTests(SimpleTestCase):
     def test_us_boundary_excludes_canada_and_includes_noncontiguous_states(self):
@@ -255,6 +305,35 @@ class RoutePlannerTests(SimpleTestCase):
         self.assertTrue(is_us_location(21.3099, -157.8581))
         self.assertTrue(is_us_location(61.2181, -149.9003))
         self.assertFalse(is_us_location(43.6532, -79.3832))
+
+    def test_geocoder_accepts_duplicate_city_centers_but_rejects_distinct_cities(self):
+        def feature(label, state, longitude, latitude):
+            return {
+                'geometry': {'coordinates': [longitude, latitude]},
+                'properties': {
+                    'country_a': 'USA', 'confidence': 1,
+                    'layer': 'locality', 'label': label, 'region_a': state,
+                },
+            }
+
+        cache.clear()
+        service = OpenRouteService(api_key='test-key')
+        chicago = {'features': [
+            feature('Chicago, IL, USA', 'IL', -87.66063, 41.87897),
+            feature('Chicago, IL, USA', 'IL', -87.924632, 41.954397),
+        ]}
+        with patch('fuel_routes.routing._json_request', return_value=chicago):
+            location = service.geocode('Chicago, IL')
+        self.assertEqual(location['longitude'], -87.66063)
+
+        springfield = {'features': [
+            feature('Springfield, IL, USA', 'IL', -89.65, 39.78),
+            feature('Springfield, MO, USA', 'MO', -93.29, 37.21),
+        ]}
+        with patch('fuel_routes.routing._json_request', return_value=springfield):
+            with self.assertRaises(RoutingError) as raised:
+                service.geocode('Springfield')
+        self.assertEqual(raised.exception.code, 'ambiguous_location')
 
     def test_cheaper_station_ahead_avoids_expensive_stop(self):
         def candidate(mile, price, key):

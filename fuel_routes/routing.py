@@ -127,9 +127,20 @@ class OpenRouteService:
             )
         plausible.sort(key=lambda item: -item[0])
         best = plausible[0]
+
+        def same_named_locality(other):
+            first, second = best[3], other[3]
+            return (
+                first.get('layer') == second.get('layer') == 'locality'
+                and bool(first.get('label'))
+                and first['label'].strip().casefold()
+                == (second.get('label') or '').strip().casefold()
+                and first.get('region_a') == second.get('region_a')
+            )
         if any(
             other[0] >= best[0] - 0.05
             and haversine_miles(best[1], best[2], other[1], other[2]) > 10
+            and not same_named_locality(other)
             for other in plausible[1:]
         ):
             raise RoutingError(

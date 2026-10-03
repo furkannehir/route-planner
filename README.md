@@ -111,11 +111,12 @@ The import uses these rules:
   ambiguous, even when they are close together. A matching gas POI near the
   listed town without a matching road or exit is also ambiguous and excluded.
 
-The current offline import resolves **2,619 of 6,626** unique US stations
-(690 gas POIs linked to a matching exit and 1,929 approximate exits). The
-remaining 4,007 locations are recorded as ambiguous or unresolved in
-`import-coverage.json`, which also breaks down exclusion reasons. This includes
-321 town-level gas POI candidates that lack a matching road or exit. A `station`
+The current import resolves **2,625 of 6,626** unique US stations
+(690 gas POIs linked to a matching exit, six Geoapify station matches, and
+1,929 approximate exits). The remaining 4,001 locations are recorded as
+ambiguous or unresolved in `import-coverage.json`, which also breaks down
+exclusion reasons. This includes 321 town-level gas POI candidates that lack a
+matching road or exit. A `station`
 coordinate is the matched POI's point, while an `exit` coordinate approximates
 station access.
 
@@ -128,11 +129,11 @@ or a distinctive full name; a chain brand alone is insufficient. Results that
 resolve only to a city or give multiple plausible locations remain excluded.
 Geocoded POIs must also match the listed state and city and lie within eight
 miles of the listed town.
-The local import report currently records zero Geoapify matches because no API
-key was supplied. With a key, run the import before serving route requests; if
-the daily request cap is reached, rerun it on the next UTC day to finish the
-cached backlog. No Geoapify calls are made by the normal import or by API
-requests.
+When displaying geocoded locations, show the Geoapify attribution included in
+the API response; the browser preview links to Geoapify as well. Run the
+geocoding import before serving route requests; if the daily request cap is
+reached, rerun it on the next UTC day to finish the cached backlog. No
+Geoapify calls are made by the normal import or by API requests.
 
 OpenInterstate is derived from OpenStreetMap and licensed under ODbL. GeoNames
 is licensed under CC BY 4.0. Coordinate inputs are validated against the
