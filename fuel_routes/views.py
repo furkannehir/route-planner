@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -23,6 +24,7 @@ def health(request):
 
 
 @require_GET
+@never_cache
 def demo(request):
     return render(request, 'fuel_routes/demo.html')
 
