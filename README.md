@@ -63,10 +63,10 @@ response. A route with no reachable eligible station returns 422 rather than
 inventing a stop. [OpenRouteService limits public driving directions to 6,000
 km](https://openrouteservice.org/restrictions/).
 
-The browser map preview uses Leaflet and OpenStreetMap tiles for a human
+The browser map preview uses MapLibre and OpenFreeMap vector tiles for a human
 viewing the returned GeoJSON. The API itself returns the geometry; clients can
 render it with any GeoJSON map library. The preview requires internet access
-for its tiles and Leaflet.
+for the tiles and MapLibre.
 
 ## One-time fuel station import
 

@@ -11,7 +11,9 @@
 2. Import `postman/route-planner.postman_collection.json` into Postman. Its
    `baseUrl` is `http://127.0.0.1:8000`. Open
    `http://127.0.0.1:8000/api/v1/demo/` in a browser tab. The browser form is
-   already set to Dallas and Chicago.
+   already set to Dallas and Chicago. The preview uses OpenFreeMap vector
+   tiles. If an older page still shows blocked OpenStreetMap tiles, restart
+   Django and reload the browser tab.
 3. Have `fuel_routes/management/commands/import_fuel_prices.py`,
    `fuel_routes/routing.py`, `fuel_routes/planning.py`, `fuel_routes/views.py`,
    and `import-coverage.json` ready to show. Keep `.env` and both API keys off

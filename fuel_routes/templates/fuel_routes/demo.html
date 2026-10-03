@@ -4,15 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fuel Route Planner Demo</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css">
   <style>
     :root { font-family: system-ui, sans-serif; color: #12212d; background: #f3f6f7; }
-    body { margin: 0; }
+    html, body { height: 100%; }
+    body { margin: 0; display: flex; flex-direction: column; }
     header { background: #123c45; color: white; padding: 1rem 1.4rem; }
     header h1 { margin: 0; font-size: 1.3rem; }
     header p { margin: .3rem 0 0; font-size: .9rem; opacity: .9; }
-    main { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; min-height: calc(100vh - 78px); }
-    aside { padding: 1.2rem; background: white; overflow: auto; }
+    main { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
+    aside { padding: 1.2rem; background: white; overflow: auto; min-height: 0; }
     fieldset { border: 1px solid #d5dfe1; border-radius: 8px; margin: 0 0 1rem; padding: .8rem; }
     legend { font-weight: 700; padding: 0 .3rem; }
     label { display: block; font-size: .85rem; margin-bottom: .5rem; }
@@ -23,10 +24,14 @@
     #summary { font-size: .95rem; line-height: 1.65; }
     .stop { border-top: 1px solid #d5dfe1; padding: .7rem 0; font-size: .9rem; }
     .note { color: #47616b; font-size: .8rem; }
-    #map { min-height: 65vh; height: 100%; }
-    @media (max-width: 720px) { main { grid-template-columns: 1fr; } #map { height: 60vh; } }
+    #map { min-height: 0; height: 100%; }
+    @media (max-width: 720px) {
+      body { height: auto; min-height: 100%; }
+      main { display: block; flex: none; }
+      aside { overflow: visible; }
+      #map { height: 60vh; min-height: 320px; }
+    }
   </style>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
 <body>
   <header>
@@ -54,21 +59,69 @@
       <p id="status" role="status"></p>
       <div id="summary"></div>
       <div id="stops"></div>
-      <p class="note">Fuel stops are estimated from the listed prices and prelocated stations. Exit coordinates and access distances are approximate. The map uses OpenStreetMap tiles with attribution below. Some station coordinates are powered by <a href="https://www.geoapify.com/">Geoapify</a>.</p>
+      <p class="note">Fuel stops are estimated from the listed prices and prelocated stations. Exit coordinates and access distances are approximate. Map tiles by <a href="https://openfreemap.org/">OpenFreeMap</a>, using <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> data. Some station coordinates are powered by <a href="https://www.geoapify.com/">Geoapify</a>.</p>
     </aside>
     <div id="map" aria-label="Route and recommended fuel stops"></div>
   </main>
-  <script>
-    const map = L.map('map').setView([38.5, -98.5], 4);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
-    }).addTo(map);
-    let routeLayer;
+  <script type="module">
+    import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: 'https://tiles.openfreemap.org/styles/liberty',
+      center: [-98.5, 38.5],
+      zoom: 4
+    });
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    const mapReady = new Promise(resolve => map.once('load', resolve));
     const form = document.getElementById('route-form');
     const status = document.getElementById('status');
     const summary = document.getElementById('summary');
     const stops = document.getElementById('stops');
+
+    function drawRoute(collection) {
+      const route = collection.features.find(feature => feature.properties.kind === 'route');
+      if (!route) throw new Error('The route response has no map geometry.');
+      const points = {
+        type: 'FeatureCollection',
+        features: collection.features.filter(feature => feature.geometry.type === 'Point')
+      };
+      const line = {type: 'FeatureCollection', features: [route]};
+      if (map.getSource('planned-route')) {
+        map.getSource('planned-route').setData(line);
+        map.getSource('route-points').setData(points);
+      } else {
+        map.addSource('planned-route', {type: 'geojson', data: line});
+        map.addLayer({
+          id: 'planned-route-line', type: 'line', source: 'planned-route',
+          paint: {'line-color': '#087a75', 'line-width': 5, 'line-opacity': 0.9}
+        });
+        map.addSource('route-points', {type: 'geojson', data: points});
+        map.addLayer({
+          id: 'route-point-circles', type: 'circle', source: 'route-points',
+          paint: {
+            'circle-radius': 8, 'circle-stroke-color': '#fff',
+            'circle-stroke-width': 2,
+            'circle-color': ['match', ['get', 'kind'],
+              'fuel_stop', '#e36c29', 'start', '#1675bd', '#9e315e']
+          }
+        });
+        map.on('click', 'route-point-circles', event => {
+          const feature = event.features[0];
+          new maplibregl.Popup()
+            .setLngLat(feature.geometry.coordinates)
+            .setText(feature.properties.name || feature.properties.label || '')
+            .addTo(map);
+        });
+        map.on('mouseenter', 'route-point-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'route-point-circles', () => { map.getCanvas().style.cursor = ''; });
+      }
+      const bounds = new maplibregl.LngLatBounds();
+      for (const [longitude, latitude] of route.geometry.coordinates) {
+        bounds.extend([longitude, latitude]);
+      }
+      map.fitBounds(bounds, {padding: 40, maxZoom: 10});
+    }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -88,22 +141,8 @@
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error?.detail || 'Route planning failed.');
-        if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = L.geoJSON(data.map, {
-          style: () => ({color: '#087a75', weight: 5, opacity: .9}),
-          pointToLayer: (feature, latlng) => {
-            const color = feature.properties.kind === 'fuel_stop' ? '#e36c29' :
-              feature.properties.kind === 'start' ? '#1675bd' : '#9e315e';
-            return L.circleMarker(latlng, {radius: 8, color: 'white', weight: 2, fillColor: color, fillOpacity: 1});
-          },
-          onEachFeature: (feature, layer) => {
-            if (feature.geometry.type !== 'Point') return;
-            const popup = document.createElement('div');
-            popup.textContent = feature.properties.name || feature.properties.label;
-            layer.bindPopup(popup);
-          }
-        }).addTo(map);
-        map.fitBounds(routeLayer.getBounds(), {padding: [24, 24]});
+        await mapReady;
+        drawRoute(data.map);
         status.textContent = `${data.provider_requests.directions} routing call(s), ${data.provider_requests.geocoding} geocoding call(s) on this request.`;
         summary.textContent = `${data.route.distance_miles} miles · ${data.fuel.fuel_used_gallons} gallons used · $${data.fuel.total_cost_usd} spent at ${data.fuel_stops.length} fuel stop(s)`;
         stops.replaceChildren();
